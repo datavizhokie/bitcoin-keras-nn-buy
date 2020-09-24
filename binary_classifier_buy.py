@@ -6,7 +6,6 @@ from tensorflow.keras.optimizers import SGD, Adam
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 from sklearn.model_selection import train_test_split
 from sklearn import metrics
-#import os
 import numpy as np
 import datetime
 import json
@@ -14,43 +13,54 @@ import json
 with open('configs.json') as f:
   configs = json.load(f)
 
-user        = configs['SF_USER']
-password    = configs['SF_PASSWORD']
-account     = configs['ACCOUNT']
-warehouse   = 'COMPUTE_WH'
-database    = 'TRADING_DB'
-schema      = 'PUBLIC'
+def pull_snowflake_data(table):
 
-conn = snowflake.connector.connect(
-    user=user,
-    password=password,
-    account=account,
-    warehouse=warehouse,
-    database=database,
-    schema=schema
-)
+    user        = configs['SF_USER']
+    password    = configs['SF_PASSWORD']
+    account     = configs['ACCOUNT']
+    warehouse   = 'COMPUTE_WH'
+    database    = 'TRADING_DB'
+    schema      = 'PUBLIC'
+    signal      = 'buy_binary'
 
-conn.cursor().execute('USE warehouse COMPUTE_WH')
-conn.cursor().execute('USE TRADING_DB.BTC_USD')
+    conn = snowflake.connector.connect(
+        user=user,
+        password=password,
+        account=account,
+        warehouse=warehouse,
+        database=database,
+        schema=schema
+    )
 
-table = 'TRADE_PROFIT_SIGNALS'
+    conn.cursor().execute('USE warehouse COMPUTE_WH')
+    conn.cursor().execute('USE TRADING_DB.BTC_USD')
 
-query = f'''
-select * from TRADING_DB.BTC_USD.{table};
-'''
-cur = conn.cursor().execute(query)
-df = pd.DataFrame.from_records(iter(cur), columns=[x[0] for x in cur.description])
-print(f'There are {len(df)} records read from Snowflake table {table}')
+    query = f'''
+    select * from TRADING_DB.BTC_USD.{table};
+    '''
+    cur = conn.cursor().execute(query)
+    df = pd.DataFrame.from_records(iter(cur), columns=[x[0] for x in cur.description])
+    print(f'There are {len(df)} records read from Snowflake table {table}')
 
-df['buy_binary'] = np.where(df.ORDER_SIGNAL=='buy', 1, 0)
+    return df
 
-df['TIME'].min()
-df['TIME'].max()
-df_subset = df[df.TIME >= '2020-09-22']
-print(f"There are {len(df_subset)} records in the subset with min date {df_subset['TIME'].min()}")
+df = pull_snowflake_data('TRADE_PROFIT_SIGNALS')
 
-print("Class Counts of Training Subset:")
-df_subset.groupby('buy_binary')['SEQUENCE'].count()
+df[signal] = np.where(df.ORDER_SIGNAL=='buy', 1, 0)
+
+def subset_for_datemin(datemin):
+
+    df['TIME'].min()
+    df['TIME'].max()
+    df_subset = df[df.TIME >= datemin]
+    print(f"There are {len(df_subset)} records in the subset with min date {df_subset['TIME'].min()}")
+
+    print("Class Counts of Training Subset:")
+    df_subset.groupby('buy_binary')['SEQUENCE'].count()
+
+    return df_subset
+
+df_subset = subset_for_datemin('2020-09-22')
 
 
 # Create weights to combat class imbalance
@@ -66,45 +76,78 @@ def create_class_imb_weights(df, num_outcomes, response):
     class_weights = {0: weight_neg, 1: weight_pos}
     print("Class Weights: ", class_weights)
 
-class_weights = create_class_imb_weights(df_subset, 2, 'buy_binary')
-
-# Choose predictor fields
-fields = list(df_subset.columns.values)
-print("All Fields:")
-print(fields)
-
-fields_to_remove = ('buy_binary','PROFIT_SIGNAL','SEQUENCE',
-                    'ORDER_SIGNAL','TIME','PREV_MINUTE')
-
-fields_pred = [e for e in fields if e not in fields_to_remove]
-
-print('Response and Fields to be used as predictors:')
-print(fields_pred)
+class_weights = create_class_imb_weights(df_subset, 2, signal)
 
 
-# training and test sets
-X = df_subset[fields_pred]
-y = df_subset['buy_binary']
+def choose_predictors(fields_to_remove):
 
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=0)
+    # Choose predictor fields
+    fields = list(df_subset.columns.values)
+    print("All Fields:")
+    print(fields)
+
+    fields_pred = [e for e in fields if e not in fields_to_remove]
+
+    print('Response and Fields to be used as predictors:')
+    print(fields_pred)
+
+    return fields_pred
+
+fields_pred = choose_predictors((signal,'PROFIT_SIGNAL','SEQUENCE',
+                        'ORDER_SIGNAL','TIME','PREV_MINUTE'))
 
 
-#TODO
-def oversample_minority_class():
-    pass
 
-# normalize training data
-# Scale TRAINING data with mean 0 and stdev 1
-scaler = StandardScaler()
-# scaler.fit(X_train)
+def setup_train_and_test(test_size, fields_pred, signal):
 
-X_train_scaled = scaler.fit_transform(X_train)
-X_test_scaled = scaler.transform(X_test)
+    # training and test sets
+    X = df_subset[fields_pred]
+    y = df_subset[signal]
 
-print("Training Features Shape: ", X_train_scaled.shape) 
-print("Test Features Shape: ", X_test_scaled.shape) 
-print("Training Labels Shape: ", y_train.shape) 
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=0)
 
+    return X_train, X_test, y_train, y_test
+
+X_train, X_test, y_train, y_test = setup_train_and_test(0.3, fields_pred, signal)
+
+def oversample_minority_class(signal):
+    X = pd.concat([X_train, y_train], axis=1)
+    no_buy = X[X[signal] == 0]
+    buy = X[X[signal] == 1]
+
+    buy_upsampled = resample(buy,
+                             replace=True,
+                             n_samples=len(no_buy),
+                             random_state=12345)
+
+    train_resmpled = no_buy.append(buy_upsampled)
+    print("Class Counts After Oversampling:")
+    print(train_resmpled.groupby('buy_binary')['buy_binary'].count())
+
+    X_train = train_resmpled[fields_pred]
+    y_train = train_resmpled[signal]
+
+    return X_train, y_train
+
+X_train, y_train = oversample_minority_class(signal)
+
+
+def norm_train_data(X_train, X_test, y_train):
+    # normalize training data
+    # Scale TRAINING data with mean 0 and stdev 1
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train)
+    X_test_scaled = scaler.transform(X_test)
+
+    print("Training Features Shape: ", X_train_scaled.shape) 
+    print("Test Features Shape: ", X_test_scaled.shape) 
+    print("Training Labels Shape: ", y_train.shape) 
+
+    return X_train_scaled, X_test_scaled
+
+ X_train_scaled, X_test_scaled = norm_train_data(X_train, X_test, y_train)   
+
+#TODO: create functions for modeling portions
 
 # set up keras sequental neural network
 opt = Adam(lr=0.0001, decay=1e-6)
@@ -142,8 +185,8 @@ model.fit(X_train_scaled,
           batch_size=20, 
           callbacks=[tensorboard_callback],
           validation_data = (X_test_scaled, y_test),
-          shuffle=True,
-          class_weight=class_weights)
+          shuffle=True)
+          #class_weight=class_weights)
 
 # evaluate best model
 model.evaluate(X_test_scaled, y_test, batch_size=20, verbose=1)
