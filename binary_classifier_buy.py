@@ -53,7 +53,7 @@ def pull_snowflake_data(table, signal):
     return df
 
 
-def subset_for_datemin(date_field, datemin, signal):
+def subset_for_datemin(df, date_field, datemin, signal):
 
     print("Raw Date Metrics:")
     print("Date Min: ", df[date_field].min())
@@ -82,7 +82,7 @@ def create_class_imb_weights(df, num_outcomes, response):
     print("Class Weights: ", class_weights)
 
 
-def choose_predictors(fields_to_remove):
+def choose_predictors(df_subset, fields_to_remove):
 
     # Choose predictor fields
     fields = list(df_subset.columns.values)
@@ -99,7 +99,7 @@ def choose_predictors(fields_to_remove):
     return fields_pred, pred_dim
 
 
-def setup_train_and_test(test_size, fields_pred, signal):
+def setup_train_and_test(df_subset, test_size, fields_pred, signal):
 
     # training and test sets
     X = df_subset[fields_pred]
@@ -110,7 +110,7 @@ def setup_train_and_test(test_size, fields_pred, signal):
     return X_train, X_test, y_train, y_test
 
 
-def oversample_minority_class(signal, X_train, y_train):
+def oversample_minority_class(fields_pred, signal, X_train, y_train):
     X = pd.concat([X_train, y_train], axis=1)
     no_buy = X[X[signal] == 0]
     buy = X[X[signal] == 1]
@@ -178,7 +178,7 @@ def compile_model(lr, decay, pred_dim):
 
 
 # train model
-def train_neural_network(lr, decay, epochs ,batch_size, tensorboard_callback):
+def train_neural_network(model, X_test_scaled, X_train_scaled, y_train, y_test, lr, decay, epochs ,batch_size, tensorboard_callback):
 
     print(f"Learning Rate is {lr}")
     print(f"Decay is {decay}")
@@ -221,17 +221,17 @@ def train_neural_network(lr, decay, epochs ,batch_size, tensorboard_callback):
 def main():
 
     df = pull_snowflake_data('TRADE_PROFIT_SIGNALS_BY_HOUR', signal)
-    df_subset = subset_for_datemin('TIME','2020-09-26', signal)
+    df_subset = subset_for_datemin(df, 'TIME','2020-09-26', signal)
     class_weights = create_class_imb_weights(df_subset, 2, signal)
 
-    fields_pred, pred_dim = choose_predictors((signal,'PROFIT_SIGNAL','SEQUENCE',
+    fields_pred, pred_dim = choose_predictors(df_subset, (signal,'PROFIT_SIGNAL','SEQUENCE',
                                             'ORDER_SIGNAL','TIME','PREV_MINUTE','PREV_HOUR'))
 
-    X_train, X_test, y_train, y_test = setup_train_and_test(0.3, fields_pred, signal)
-    X_train, y_train = oversample_minority_class(signal, X_train, y_train)
+    X_train, X_test, y_train, y_test = setup_train_and_test(df_subset, 0.3, fields_pred, signal)
+    X_train, y_train = oversample_minority_class(fields_pred, signal, X_train, y_train)
     X_train_scaled, X_test_scaled = norm_train_data(X_train, X_test, y_train)
     model, tensorboard_callback, lr, decay = compile_model(0.001, 1e-6, pred_dim)
-    y_pred = train_neural_network(lr, decay, 3, 10, tensorboard_callback)
+    y_pred = train_neural_network(model, X_test_scaled, X_train_scaled, y_train, y_test, lr, decay, 3, 10, tensorboard_callback)
 
 
 if __name__== "__main__" :
