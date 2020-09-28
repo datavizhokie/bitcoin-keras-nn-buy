@@ -5,7 +5,10 @@ from tensorflow import keras
 from tensorflow.keras.optimizers import SGD, Adam
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 from sklearn.model_selection import train_test_split
+from sklearn.utils import resample
 from sklearn import metrics
+from sklearn.metrics import classification_report
+import matplotlib.pyplot as plt
 import numpy as np
 import datetime
 import json
@@ -13,7 +16,10 @@ import json
 with open('configs.json') as f:
   configs = json.load(f)
 
-def pull_snowflake_data(table):
+signal = 'buy_binary'
+
+
+def pull_snowflake_data(table, signal):
 
     user        = configs['SF_USER']
     password    = configs['SF_PASSWORD']
@@ -21,7 +27,6 @@ def pull_snowflake_data(table):
     warehouse   = 'COMPUTE_WH'
     database    = 'TRADING_DB'
     schema      = 'PUBLIC'
-    signal      = 'buy_binary'
 
     conn = snowflake.connector.connect(
         user=user,
@@ -42,25 +47,25 @@ def pull_snowflake_data(table):
     df = pd.DataFrame.from_records(iter(cur), columns=[x[0] for x in cur.description])
     print(f'There are {len(df)} records read from Snowflake table {table}')
 
+    # Create modeling signal
+    df[signal] = np.where(df.ORDER_SIGNAL=='buy', 1, 0)
+
     return df
 
-df = pull_snowflake_data('TRADE_PROFIT_SIGNALS')
 
-df[signal] = np.where(df.ORDER_SIGNAL=='buy', 1, 0)
+def subset_for_datemin(date_field, datemin, signal):
 
-def subset_for_datemin(datemin):
+    print("Raw Date Metrics:")
+    print("Date Min: ", df[date_field].min())
+    print("Date Max: ", df[date_field].max())
 
-    df['TIME'].min()
-    df['TIME'].max()
     df_subset = df[df.TIME >= datemin]
-    print(f"There are {len(df_subset)} records in the subset with min date {df_subset['TIME'].min()}")
+    print(f"There are {len(df_subset)} records in the subset with min date {df_subset[date_field].min()}")
 
     print("Class Counts of Training Subset:")
-    df_subset.groupby('buy_binary')['SEQUENCE'].count()
+    df_subset.groupby(signal)['SEQUENCE'].count()
 
     return df_subset
-
-df_subset = subset_for_datemin('2020-09-22')
 
 
 # Create weights to combat class imbalance
@@ -76,8 +81,6 @@ def create_class_imb_weights(df, num_outcomes, response):
     class_weights = {0: weight_neg, 1: weight_pos}
     print("Class Weights: ", class_weights)
 
-class_weights = create_class_imb_weights(df_subset, 2, signal)
-
 
 def choose_predictors(fields_to_remove):
 
@@ -88,14 +91,12 @@ def choose_predictors(fields_to_remove):
 
     fields_pred = [e for e in fields if e not in fields_to_remove]
 
-    print('Response and Fields to be used as predictors:')
+    print('Fields to be used as predictors:')
     print(fields_pred)
 
-    return fields_pred
+    pred_dim = len(fields_pred)
 
-fields_pred = choose_predictors((signal,'PROFIT_SIGNAL','SEQUENCE',
-                        'ORDER_SIGNAL','TIME','PREV_MINUTE'))
-
+    return fields_pred, pred_dim
 
 
 def setup_train_and_test(test_size, fields_pred, signal):
@@ -108,9 +109,8 @@ def setup_train_and_test(test_size, fields_pred, signal):
 
     return X_train, X_test, y_train, y_test
 
-X_train, X_test, y_train, y_test = setup_train_and_test(0.3, fields_pred, signal)
 
-def oversample_minority_class(signal):
+def oversample_minority_class(signal, X_train, y_train):
     X = pd.concat([X_train, y_train], axis=1)
     no_buy = X[X[signal] == 0]
     buy = X[X[signal] == 1]
@@ -122,18 +122,15 @@ def oversample_minority_class(signal):
 
     train_resmpled = no_buy.append(buy_upsampled)
     print("Class Counts After Oversampling:")
-    print(train_resmpled.groupby('buy_binary')['buy_binary'].count())
+    print(train_resmpled.groupby(signal)[signal].count())
 
     X_train = train_resmpled[fields_pred]
     y_train = train_resmpled[signal]
 
     return X_train, y_train
 
-X_train, y_train = oversample_minority_class(signal)
-
 
 def norm_train_data(X_train, X_test, y_train):
-    # normalize training data
     # Scale TRAINING data with mean 0 and stdev 1
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
@@ -145,58 +142,97 @@ def norm_train_data(X_train, X_test, y_train):
 
     return X_train_scaled, X_test_scaled
 
- X_train_scaled, X_test_scaled = norm_train_data(X_train, X_test, y_train)   
-
-#TODO: create functions for modeling portions
 
 # set up keras sequental neural network
-opt = Adam(lr=0.0001, decay=1e-6)
+def compile_model(lr, decay, pred_dim):
+    opt = Adam(lr=lr, decay=decay)
 
-model = keras.Sequential([
-    keras.layers.Flatten(input_shape=(8,)),
-    keras.layers.Dense(16, activation=tf.nn.relu),
-    keras.layers.Dense(16, activation=tf.nn.relu),
-    keras.layers.Dense(1, activation=tf.nn.sigmoid),
-])
+    # For binary classification, use Sigmoid activation as the last layer
+    model = keras.Sequential([
+        keras.layers.Flatten(input_shape=(pred_dim,)),
+        keras.layers.Dense(16, activation=tf.nn.relu),
+        keras.layers.Dense(16, activation=tf.nn.relu),
+        keras.layers.Dense(1, activation=tf.nn.sigmoid),
+    ])
 
-METRICS = [
-      keras.metrics.TruePositives(name='tp'),
-      keras.metrics.FalsePositives(name='fp'),
-      keras.metrics.TrueNegatives(name='tn'),
-      keras.metrics.FalseNegatives(name='fn'), 
-      keras.metrics.BinaryAccuracy(name='accuracy'),
-      keras.metrics.Precision(name='precision'),
-      keras.metrics.Recall(name='recall')
-]
+    METRICS = [
+        keras.metrics .TruePositives(name='tp'),
+        keras.metrics.FalsePositives(name='fp'),
+        keras.metrics.TrueNegatives(name='tn'),
+        keras.metrics.FalseNegatives(name='fn'), 
+        keras.metrics.BinaryAccuracy(name='accuracy'),
+        keras.metrics.Precision(name='precision'),
+        keras.metrics.Recall(name='recall')
+    ]
 
-# compile model
-model.compile(optimizer=opt,
-              loss='binary_crossentropy',
-              metrics=METRICS)
+    # compile model
+    model.compile(optimizer=opt,
+                loss='binary_crossentropy',
+                metrics=METRICS)
 
-# setup tensorbodard output
-log_dir = "logs/fit/" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=log_dir)
+    # setup tensorbodard output
+    log_dir = "logs/fit/" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=log_dir)
+
+    return model, tensorboard_callback, lr, decay
+
 
 # train model
-model.fit(X_train_scaled, 
-          y_train, 
-          epochs=5, 
-          batch_size=20, 
-          callbacks=[tensorboard_callback],
-          validation_data = (X_test_scaled, y_test),
-          shuffle=True)
-          #class_weight=class_weights)
+def train_neural_network(lr, decay, epochs ,batch_size, tensorboard_callback):
 
-# evaluate best model
-model.evaluate(X_test_scaled, y_test, batch_size=20, verbose=1)
+    print(f"Learning Rate is {lr}")
+    print(f"Decay is {decay}")
+    print(f"Training for {epochs} epochs...")
 
-# get predictions
-y_pred = model.predict_classes(X_test_scaled)
+    history = model.fit(X_train_scaled, 
+                        y_train, 
+                        epochs=epochs, 
+                        batch_size=batch_size, 
+                        callbacks=[tensorboard_callback],
+                        validation_data = (X_test_scaled, y_test),
+                        shuffle=True)
+                        #class_weight=class_weights)
 
-# confusion matrix
-matrix = metrics.confusion_matrix(y_test, y_pred)
-print("Confusion Matrix")
-print("|TP FP|")
-print("|FN TN|")
-print(matrix)
+    # evaluate best model
+    score = model.evaluate(X_test_scaled, y_test, batch_size=10, verbose=1)
+
+    print('Test loss:', round(score[0], 3))
+    print('Test accuracy:', round(score[5], 3))
+    plt.plot(history.history['loss'])
+    plt.plot(history.history['val_loss'])
+    plt.title('Model Loss')
+    plt.ylabel('Loss')
+    plt.xlabel('Epoch')
+    plt.legend(['train', 'test'], loc='upper left')
+
+    # get predictions
+    y_pred = model.predict_classes(X_test_scaled)
+
+    # confusion matrix
+    matrix = metrics.confusion_matrix(y_test, y_pred)
+    print("Confusion Matrix")
+    print("|TP FP|")
+    print("|FN TN|")
+    print(matrix)
+
+    return y_pred
+
+
+def main():
+
+    df = pull_snowflake_data('TRADE_PROFIT_SIGNALS_BY_HOUR', signal)
+    df_subset = subset_for_datemin('TIME','2020-09-26', signal)
+    class_weights = create_class_imb_weights(df_subset, 2, signal)
+
+    fields_pred, pred_dim = choose_predictors((signal,'PROFIT_SIGNAL','SEQUENCE',
+                                            'ORDER_SIGNAL','TIME','PREV_MINUTE','PREV_HOUR'))
+
+    X_train, X_test, y_train, y_test = setup_train_and_test(0.3, fields_pred, signal)
+    X_train, y_train = oversample_minority_class(signal, X_train, y_train)
+    X_train_scaled, X_test_scaled = norm_train_data(X_train, X_test, y_train)
+    model, tensorboard_callback, lr, decay = compile_model(0.001, 1e-6, pred_dim)
+    y_pred = train_neural_network(lr, decay, 3, 10, tensorboard_callback)
+
+
+if __name__== "__main__" :
+    main()
