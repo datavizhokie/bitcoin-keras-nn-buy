@@ -5,7 +5,7 @@ Using a collection method with various API's, our cohort collected sequence leve
 * Class imbalance (rare "Buy" outcomes) is managed with Oversampling the Minority Class
 * Train/Test split of 70%/30%
 * The optimizer used is Adam with a learning rate of 0.001
-* The sample puled from Snowflake has 825k transactions spanning 2020-09-15 to 2020-09-24 (after oversampling the training data, there are ~1.4M records) 
+* The sample pulled from Snowflake has 825k transactions spanning 2020-09-15 through 2020-09-24 (after oversampling the training data, there are ~1.4M records) 
 
 ## General Notes
 
