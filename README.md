@@ -7,6 +7,10 @@ Using a collection method with various API's, our cohort collected sequence leve
 * The optimizer used is Adam with a learning rate of 0.001
 * The sample pulled from Snowflake has 825k transactions spanning 2020-09-15 through 2020-09-24 (after oversampling the training data, there are ~1.4M records) 
 
+Below is a snapshot of the transaction data:
+
+![alt text](https://github.com/datavizhokie/bitcoin-keras-nn-buy/blob/master/data_snapshot.png)
+
 ## General Notes
 
 I did not find TensorBoard particularly useful, but I can see it having value if you are tuning a whole bunch of jobs with different configurations. Having said that, using something like AWS Sagemaker would be a better approach. There are better techniques for remedy of class imbalance - these are not covered in this repo.
