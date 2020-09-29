@@ -71,7 +71,7 @@ def subset_for_datemin(df, date_field, datemin, signal):
     print("Date Max: ", datetime_max)
 
     df_subset = df[df.TIME >= datemin]
-    print(f"There are {len(df_subset)} records in the subset with min date {datetime_min} and max date {datetime_max}")
+    print(f"There are {len(df_subset)} records in the subset with min date {datemin} and max date {datetime_max}")
 
     print("Class Counts of Training Subset:")
     df_subset.groupby(signal)['SEQUENCE'].count()
@@ -229,7 +229,7 @@ def train_neural_network(model, X_test_scaled, X_train_scaled, y_train, y_test, 
     print('Test accuracy:', round(score[5], 3))
     plt.plot(history.history['loss'])
     plt.plot(history.history['val_loss'])
-    plt.title(f"Model Loss: Scope {datetime_min}-{datetime_max}")
+    plt.title(f"Model Loss: Scope {datemin}-{datetime_max}")
     plt.ylabel('Loss')
     plt.xlabel('Epoch')
     plt.legend(['train', 'test'], loc='upper left')
@@ -252,7 +252,7 @@ def train_neural_network(model, X_test_scaled, X_train_scaled, y_train, y_test, 
 def main():
 
     df = pull_snowflake_data('TRADE_PROFIT_SIGNALS_BY_HOUR', signal)
-    df_subset, datetime_min, datetime_max = subset_for_datemin(df, 'TIME','2020-09-27', signal)
+    df_subset, datetime_min, datetime_max = subset_for_datemin(df, 'TIME','2020-09-10', signal)
     class_weights = create_class_imb_weights(df_subset, 2, signal)
 
     fields_pred, pred_dim = choose_predictors(df_subset, (signal,'PROFIT_SIGNAL','SEQUENCE',
@@ -262,7 +262,7 @@ def main():
     X_train, y_train = oversample_minority_class(fields_pred, signal, X_train, y_train)
     X_train_scaled, X_test_scaled = norm_train_data(X_train, X_test, y_train)
     model, tensorboard_callback, lr, decay = compile_model(0.001, 1e-6, pred_dim)
-    y_pred = train_neural_network(model, X_test_scaled, X_train_scaled, y_train, y_test, lr, decay, 3, 10, tensorboard_callback, datetime_min, datetime_max)
+    y_pred = train_neural_network(model, X_test_scaled, X_train_scaled, y_train, y_test, lr, decay, 20, 10, tensorboard_callback, datetime_min, datetime_max)
 
 
 if __name__== "__main__" :
