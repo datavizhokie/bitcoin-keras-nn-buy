@@ -17,6 +17,7 @@ with open('configs.json') as f:
   configs = json.load(f)
 
 signal = 'buy_binary'
+date_time_format = '%Y-%m-%d %H:%M'
 
 
 def pull_snowflake_data(table, signal):
@@ -53,23 +54,34 @@ def pull_snowflake_data(table, signal):
     return df
 
 
+
 def subset_for_datemin(df, date_field, datemin, signal):
 
+    ''' Selects the minimum date for training;
+        the maxium date will be the latest date
+        from Snowflake 
+    '''
+
+
+    datetime_min = df[date_field].min().strftime(date_time_format)
+    datetime_max = df[date_field].max().strftime(date_time_format)
+
     print("Raw Date Metrics:")
-    print("Date Min: ", df[date_field].min())
-    print("Date Max: ", df[date_field].max())
+    print("Date Min: ", datetime_min)
+    print("Date Max: ", datetime_max)
 
     df_subset = df[df.TIME >= datemin]
-    print(f"There are {len(df_subset)} records in the subset with min date {df_subset[date_field].min()}")
+    print(f"There are {len(df_subset)} records in the subset with min date {datetime_min} and max date {datetime_max}")
 
     print("Class Counts of Training Subset:")
     df_subset.groupby(signal)['SEQUENCE'].count()
 
-    return df_subset
+    return df_subset, datetime_min, datetime_max
 
 
 # Create weights to combat class imbalance
 def create_class_imb_weights(df, num_outcomes, response):
+    ''' Model can be trained with class weights to combat class imbalance '''
 
     no_pos_count, pos_count = np.bincount(df[response])
     total_count = len(df[response])
@@ -83,6 +95,11 @@ def create_class_imb_weights(df, num_outcomes, response):
 
 
 def choose_predictors(df_subset, fields_to_remove):
+
+    ''' Select predictor fields by feeding in fields to exclude;
+        Tensorflow does not like string or date fields - use
+        categorical encoding and/or datetime -> ordinal if needed
+    '''
 
     # Choose predictor fields
     fields = list(df_subset.columns.values)
@@ -111,6 +128,10 @@ def setup_train_and_test(df_subset, test_size, fields_pred, signal):
 
 
 def oversample_minority_class(fields_pred, signal, X_train, y_train):
+    ''' To remedy the class imbalance (outcome "buy" being rare),
+        oversample the "buy" outcome 
+    '''
+
     X = pd.concat([X_train, y_train], axis=1)
     no_buy = X[X[signal] == 0]
     buy = X[X[signal] == 1]
@@ -131,6 +152,7 @@ def oversample_minority_class(fields_pred, signal, X_train, y_train):
 
 
 def norm_train_data(X_train, X_test, y_train):
+    ''' Tensorflow requires normalized data for training '''
     # Scale TRAINING data with mean 0 and stdev 1
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
@@ -145,6 +167,10 @@ def norm_train_data(X_train, X_test, y_train):
 
 # set up keras sequental neural network
 def compile_model(lr, decay, pred_dim):
+    ''' Set up neural network layers,
+        choose evaluation metrics,
+        compile model '''
+
     opt = Adam(lr=lr, decay=decay)
 
     # For binary classification, use Sigmoid activation as the last layer
@@ -177,8 +203,11 @@ def compile_model(lr, decay, pred_dim):
     return model, tensorboard_callback, lr, decay
 
 
-# train model
-def train_neural_network(model, X_test_scaled, X_train_scaled, y_train, y_test, lr, decay, epochs ,batch_size, tensorboard_callback):
+def train_neural_network(model, X_test_scaled, X_train_scaled, y_train, y_test, lr, decay, epochs, batch_size, tensorboard_callback, datetime_min, datetime_max):
+    ''' Train model across specified epochs and batch size;
+        Viz Loss across epoch;
+        Evaluate best overall model from training
+    '''
 
     print(f"Learning Rate is {lr}")
     print(f"Decay is {decay}")
@@ -200,10 +229,12 @@ def train_neural_network(model, X_test_scaled, X_train_scaled, y_train, y_test, 
     print('Test accuracy:', round(score[5], 3))
     plt.plot(history.history['loss'])
     plt.plot(history.history['val_loss'])
-    plt.title('Model Loss')
+    plt.title(f"Model Loss: Scope {datetime_min}-{datetime_max}")
     plt.ylabel('Loss')
     plt.xlabel('Epoch')
     plt.legend(['train', 'test'], loc='upper left')
+    plt.savefig(f"Model Loss: lr={lr}, decay={decay}, epochs={epochs}, batch_size={batch_size}; Scope {datetime_min}-{datetime_max}.png", format="png")
+    #plt.show(block=False)
 
     # get predictions
     y_pred = model.predict_classes(X_test_scaled)
@@ -221,7 +252,7 @@ def train_neural_network(model, X_test_scaled, X_train_scaled, y_train, y_test, 
 def main():
 
     df = pull_snowflake_data('TRADE_PROFIT_SIGNALS_BY_HOUR', signal)
-    df_subset = subset_for_datemin(df, 'TIME','2020-09-26', signal)
+    df_subset, datetime_min, datetime_max = subset_for_datemin(df, 'TIME','2020-09-27', signal)
     class_weights = create_class_imb_weights(df_subset, 2, signal)
 
     fields_pred, pred_dim = choose_predictors(df_subset, (signal,'PROFIT_SIGNAL','SEQUENCE',
@@ -231,7 +262,7 @@ def main():
     X_train, y_train = oversample_minority_class(fields_pred, signal, X_train, y_train)
     X_train_scaled, X_test_scaled = norm_train_data(X_train, X_test, y_train)
     model, tensorboard_callback, lr, decay = compile_model(0.001, 1e-6, pred_dim)
-    y_pred = train_neural_network(model, X_test_scaled, X_train_scaled, y_train, y_test, lr, decay, 3, 10, tensorboard_callback)
+    y_pred = train_neural_network(model, X_test_scaled, X_train_scaled, y_train, y_test, lr, decay, 3, 10, tensorboard_callback, datetime_min, datetime_max)
 
 
 if __name__== "__main__" :
