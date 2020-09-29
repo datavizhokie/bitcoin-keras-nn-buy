@@ -76,7 +76,7 @@ def subset_for_datemin(df, date_field, datemin, signal):
     print("Class Counts of Training Subset:")
     df_subset.groupby(signal)['SEQUENCE'].count()
 
-    return df_subset, datetime_min, datetime_max
+    return df_subset, datemin, datetime_max
 
 
 # Create weights to combat class imbalance
@@ -203,10 +203,24 @@ def compile_model(lr, decay, pred_dim):
     return model, tensorboard_callback, lr, decay
 
 
-def train_neural_network(model, X_test_scaled, X_train_scaled, y_train, y_test, lr, decay, epochs, batch_size, tensorboard_callback, datetime_min, datetime_max):
+def train_neural_network(model, X_test_scaled, X_train_scaled, y_train, y_test, lr, decay, epochs, batch_size, tensorboard_callback, datemin, datetime_max):
     ''' Train model across specified epochs and batch size;
         Viz Loss across epoch;
-        Evaluate best overall model from training
+        Evaluate best overall model from training.
+        Parameters
+        ----------
+        :model: a Keras object... Model groups layers into an object with training and inference features
+        :X_test_scaled: normalized predictor tensor for validation
+        :X_test_scaled: normalized predictor tensor for training
+        :t_train: response tensor for training
+        :y_test: response tensor for validation
+        :lr: learning rate
+        :decay: the decay associated with the learning rate (how much the lr will change between batches)
+        :epochs: the number of time the model will cycle through the training data
+        :batch_size: Number of samples per batch of computation
+        :tensorboard_callback: a callback method for visualizing training jobs on TensorBoard
+        :datemin: the minimal date specified to subset the scope of data
+        :datetime_max: the maximum datetime from the dataframe coming out of the Snowflake table
     '''
 
     print(f"Learning Rate is {lr}")
@@ -233,7 +247,7 @@ def train_neural_network(model, X_test_scaled, X_train_scaled, y_train, y_test, 
     plt.ylabel('Loss')
     plt.xlabel('Epoch')
     plt.legend(['train', 'test'], loc='upper left')
-    plt.savefig(f"Model Loss: lr={lr}, decay={decay}, epochs={epochs}, batch_size={batch_size}; Scope {datetime_min}-{datetime_max}.png", format="png")
+    plt.savefig(f"Model Loss: lr={lr}, decay={decay}, epochs={epochs}, batch_size={batch_size}; Scope {datemin}-{datetime_max}.png", format="png")
     #plt.show(block=False)
 
     # get predictions
@@ -252,7 +266,7 @@ def train_neural_network(model, X_test_scaled, X_train_scaled, y_train, y_test, 
 def main():
 
     df = pull_snowflake_data('TRADE_PROFIT_SIGNALS_BY_HOUR', signal)
-    df_subset, datetime_min, datetime_max = subset_for_datemin(df, 'TIME','2020-09-10', signal)
+    df_subset, datemin, datetime_max = subset_for_datemin(df, 'TIME','2020-09-27', signal)
     class_weights = create_class_imb_weights(df_subset, 2, signal)
 
     fields_pred, pred_dim = choose_predictors(df_subset, (signal,'PROFIT_SIGNAL','SEQUENCE',
@@ -262,7 +276,9 @@ def main():
     X_train, y_train = oversample_minority_class(fields_pred, signal, X_train, y_train)
     X_train_scaled, X_test_scaled = norm_train_data(X_train, X_test, y_train)
     model, tensorboard_callback, lr, decay = compile_model(0.001, 1e-6, pred_dim)
-    y_pred = train_neural_network(model, X_test_scaled, X_train_scaled, y_train, y_test, lr, decay, 20, 10, tensorboard_callback, datetime_min, datetime_max)
+    y_pred = train_neural_network(model, X_test_scaled, X_train_scaled, y_train, 
+                                  y_test, lr, decay, 3, 10, tensorboard_callback, 
+                                  datemin, datetime_max)
 
 
 if __name__== "__main__" :
