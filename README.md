@@ -25,6 +25,6 @@ The bulk of HP updates were around attempting to drive down the False Positive R
 ![alt text](https://github.com/datavizhokie/bitcoin-keras-nn-buy/blob/master/best_training_job.png)
 
 
-**The crypto Bitcoin data (not supplied) is proprietary to Finditly, LLC. **
+**The crypto Bitcoin data (not supplied) is proprietary to Finditly, LLC.**
 
 
